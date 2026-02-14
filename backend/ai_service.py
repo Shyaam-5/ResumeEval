@@ -12,6 +12,10 @@ CEREBRAS_API_URL = "https://api.cerebras.ai/v1/chat/completions"
 
 async def call_cerebras(messages: list, temperature: float = 0.7, max_tokens: int = 4096) -> str:
     """Call Cerebras API for text generation."""
+    if not CEREBRAS_API_KEY:
+        # Raise error to trigger fallback mechanism in caller functions
+        raise ValueError("CEREBRAS_API_KEY is not set")
+
     headers = {
         "Authorization": f"Bearer {CEREBRAS_API_KEY}",
         "Content-Type": "application/json",
@@ -91,7 +95,11 @@ Return ONLY a valid JSON array."""
         }
     ]
 
-    response = await call_cerebras(messages, temperature=0.7, max_tokens=8000)
+    try:
+        response = await call_cerebras(messages, temperature=0.7, max_tokens=8000)
+    except Exception as e:
+        print(f"Cerebras API call failed: {e}")
+        return generate_fallback_mcq(skills, count)
     questions = parse_json_response(response)
 
     if not questions or not isinstance(questions, list):
@@ -310,7 +318,17 @@ Return ONLY valid JSON."""
         }
     ]
 
-    response = await call_cerebras(messages, temperature=0.8, max_tokens=2000)
+    try:
+        response = await call_cerebras(messages, temperature=0.8, max_tokens=2000)
+    except Exception as e:
+        print(f"Cerebras API call failed: {e}")
+        return {
+            "question": f"Can you explain your experience with {skills[question_number % len(skills)]} and describe a project where you used it?",
+            "category": skills[question_number % len(skills)],
+            "difficulty": "medium",
+            "expected_key_points": ["Technical depth", "Practical experience", "Problem-solving approach"],
+            "follow_up_context": "Fallback question - API Error"
+        }
     question_data = parse_json_response(response)
 
     if not question_data or not isinstance(question_data, dict):

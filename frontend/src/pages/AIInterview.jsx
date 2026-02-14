@@ -1,248 +1,225 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { startInterview, answerInterview } from '../api';
+import { startInterview, answerInterview, textToSpeech } from '../api';
 import ProctoringGuard from '../components/ProctoringGuard';
-import { Send, Brain, MessageCircle, CheckCircle, Loader, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
+import Avatar3D from '../components/Avatar3D';
+import { Send, Brain, MessageCircle, Mic, MicOff, Volume2, VolumeX, Loader } from 'lucide-react';
+
+// Error Boundary for Avatar
+class ErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+    }
+    static getDerivedStateFromError(error) { return { hasError: true, error }; }
+    componentDidCatch(error, info) { console.error("Avatar Error:", error, info); }
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div style={{ padding: '2rem', color: '#ff7675', textAlign: 'center', background: 'rgba(0,0,0,0.5)', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                    <h4>Avatar Error</h4>
+                    <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8rem' }}>{this.state.error?.message}</pre>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
 
 export default function AIInterview() {
     const { interviewId } = useParams();
     const navigate = useNavigate();
+    const candidateRef = useRef(null);
+    const chatEndRef = useRef(null);
+
+    // State
+    const [loading, setLoading] = useState(true);
+    const [submitting, setSubmitting] = useState(false);
     const [questionData, setQuestionData] = useState(null);
     const [chatHistory, setChatHistory] = useState([]);
     const [answer, setAnswer] = useState('');
-    const [loading, setLoading] = useState(true);
-    const [submitting, setSubmitting] = useState(false);
-    const [isComplete, setIsComplete] = useState(false);
-    const [finalResult, setFinalResult] = useState(null);
     const [questionNum, setQuestionNum] = useState(1);
-    const [totalQ, setTotalQ] = useState(10);
-
-    // Speech states
-    const [isListening, setIsListening] = useState(false);
-    const [isSpeaking, setIsSpeaking] = useState(false);
-    const [speechSupported, setSpeechSupported] = useState(false);
+    const [totalQ, setTotalQ] = useState(5);
     const [ttsEnabled, setTtsEnabled] = useState(true);
 
-    const chatEndRef = useRef(null);
-    const candidateRef = useRef(null);
-    const recognitionRef = useRef(null);
-    const synthRef = useRef(null);
+    // Avatar State
+    const [isListening, setIsListening] = useState(false);
+    const [isSpeaking, setIsSpeaking] = useState(false);
+    const [isThinking, setIsThinking] = useState(false);
+    const [avatarEmotion, setAvatarEmotion] = useState('neutral');
 
-    // Initialize speech recognition
+    // Speech Recognition
+    const [speechSupported, setSpeechSupported] = useState(false);
+    const recognitionRef = useRef(null);
+    const audioRef = useRef(null);
+    const blobUrlRef = useRef(null);
+    const speakIdRef = useRef(0);
+
     useEffect(() => {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (SpeechRecognition) {
+        // Load Candidate
+        const stored = localStorage.getItem('candidate');
+        if (!stored) { navigate('/candidate/login'); return; }
+        candidateRef.current = JSON.parse(stored);
+
+        // Init Speech Recognition
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             setSpeechSupported(true);
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             const recognition = new SpeechRecognition();
             recognition.continuous = true;
             recognition.interimResults = true;
             recognition.lang = 'en-US';
 
-            let finalTranscript = '';
-
             recognition.onresult = (event) => {
-                let interimTranscript = '';
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = event.results[i][0].transcript;
+                let finalTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
                     if (event.results[i].isFinal) {
-                        finalTranscript += transcript + ' ';
-                    } else {
-                        interimTranscript = transcript;
+                        finalTranscript += event.results[i][0].transcript;
                     }
                 }
-                setAnswer(finalTranscript + interimTranscript);
+                if (finalTranscript) {
+                    setAnswer(prev => prev ? prev + ' ' + finalTranscript : finalTranscript);
+                }
             };
 
             recognition.onerror = (event) => {
-                console.error('Speech recognition error:', event.error);
-                if (event.error !== 'aborted') {
-                    setIsListening(false);
-                }
+                console.error("Speech error", event.error);
+                setIsListening(false);
             };
 
             recognition.onend = () => {
-                // Auto-restart if still in listening mode
-                if (recognitionRef.current?._shouldListen) {
-                    try { recognition.start(); } catch (e) { /* ignore */ }
-                } else {
-                    setIsListening(false);
-                }
+                if (isListening) setIsListening(false);
             };
 
             recognitionRef.current = recognition;
-            recognitionRef.current._shouldListen = false;
         }
 
-        synthRef.current = window.speechSynthesis;
+        loadInterview();
 
         return () => {
-            if (recognitionRef.current) {
-                recognitionRef.current._shouldListen = false;
-                try { recognitionRef.current.stop(); } catch (e) { /* ignore */ }
-            }
-            if (synthRef.current) {
-                synthRef.current.cancel();
-            }
+            stopTTS();
+            if (recognitionRef.current) recognitionRef.current.stop();
         };
     }, []);
 
+    // Auto-scroll chat
     useEffect(() => {
-        const stored = localStorage.getItem('candidate');
-        if (!stored) { navigate('/candidate/login'); return; }
-        candidateRef.current = JSON.parse(stored);
-        loadInterview();
-    }, []);
-
-    useEffect(() => {
-        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [chatHistory]);
-
-    // Speak a question using TTS
-    const speakText = useCallback((text) => {
-        if (!synthRef.current || !ttsEnabled) return;
-        synthRef.current.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = 0.95;
-        utterance.pitch = 1.0;
-        utterance.volume = 1.0;
-        utterance.lang = 'en-US';
-
-        // Try to use a good voice
-        const voices = synthRef.current.getVoices();
-        const goodVoice = voices.find(v => v.name.includes('Google') && v.lang.startsWith('en'))
-            || voices.find(v => v.lang.startsWith('en'));
-        if (goodVoice) utterance.voice = goodVoice;
-
-        utterance.onstart = () => setIsSpeaking(true);
-        utterance.onend = () => setIsSpeaking(false);
-        utterance.onerror = () => setIsSpeaking(false);
-        synthRef.current.speak(utterance);
-    }, [ttsEnabled]);
-
-    const toggleListening = () => {
-        if (!recognitionRef.current) return;
-
-        if (isListening) {
-            recognitionRef.current._shouldListen = false;
-            recognitionRef.current.stop();
-            setIsListening(false);
-        } else {
-            // Reset answer for new speech session if empty
-            setAnswer('');
-            recognitionRef.current._shouldListen = true;
-            try {
-                recognitionRef.current.start();
-                setIsListening(true);
-            } catch (e) {
-                console.error('Failed to start speech recognition:', e);
-            }
-        }
-    };
-
-    const stopTTS = () => {
-        if (synthRef.current) {
-            synthRef.current.cancel();
-            setIsSpeaking(false);
-        }
-    };
+        chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [chatHistory, isThinking]);
 
     const loadInterview = async () => {
         try {
-            const res = await startInterview(interviewId);
-            setQuestionData({
-                question: res.data.question,
-                category: res.data.category,
-                difficulty: res.data.difficulty,
-            });
-            setQuestionNum(res.data.question_number);
-            setTotalQ(res.data.total_questions);
+            setLoading(true);
+            setIsThinking(true);
+            const { data } = await startInterview(interviewId);
+            setIsThinking(false);
 
-            setChatHistory([{
-                type: 'ai',
-                content: res.data.question,
-                category: res.data.category,
-                difficulty: res.data.difficulty,
-            }]);
+            if (data.completed) {
+                navigate('/candidate/portal');
+                return;
+            }
 
-            // Speak the first question
-            setTimeout(() => speakText(res.data.question), 500);
-        } catch (err) {
-            console.error(err);
-            alert(err.response?.data?.detail || 'Failed to start interview');
-            navigate('/candidate/portal');
+            setQuestionData(data);
+            setQuestionNum(data.question_number || 1);
+            setTotalQ(data.total_questions || 5);
+
+            // Add initial question to chat
+            if (data.question) {
+                const msg = { type: 'ai', content: data.question };
+                setChatHistory([msg]);
+                speakText(data.question);
+            }
+        } catch (error) {
+            console.error(error);
+            setIsThinking(false);
+            // navigate('/candidate/portal');
         } finally {
             setLoading(false);
         }
     };
 
-    const handleSubmitAnswer = async () => {
-        if (!answer.trim() || submitting) return;
-
-        // Stop listening if active
-        if (isListening) {
-            recognitionRef.current._shouldListen = false;
-            recognitionRef.current.stop();
-            setIsListening(false);
+    const stopTTS = () => {
+        // Stop Deepgram audio
+        if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
         }
+        // Revoke blob URL to free memory
+        if (blobUrlRef.current) {
+            URL.revokeObjectURL(blobUrlRef.current);
+            blobUrlRef.current = null;
+        }
+        // Also cancel any browser fallback speech
+        window.speechSynthesis.cancel();
+        setIsSpeaking(false);
+    };
+
+    const speakText = async (text) => {
+        if (!ttsEnabled) return;
+
+        // Increment ID to invalidate any pending requests
+        const currentId = ++speakIdRef.current;
         stopTTS();
 
-        const userAnswer = answer.trim();
-        setAnswer('');
-
-        // Add user message to chat
-        setChatHistory(prev => [...prev, { type: 'user', content: userAnswer }]);
-
-        setSubmitting(true);
         try {
-            const res = await answerInterview({
-                candidate_id: candidateRef.current.id,
-                interview_id: parseInt(interviewId),
-                answer: userAnswer,
-            });
+            // Call Deepgram TTS via backend
+            const { data: audioBlob } = await textToSpeech(text);
 
-            // Add evaluation feedback
-            if (res.data.evaluation) {
-                setChatHistory(prev => [...prev, {
-                    type: 'feedback',
-                    score: res.data.evaluation.score,
-                    feedback: res.data.evaluation.feedback,
-                    strengths: res.data.evaluation.strengths,
-                    weaknesses: res.data.evaluation.weaknesses,
-                }]);
-            }
+            // If a newer request started while fetching, ignore this one
+            if (currentId !== speakIdRef.current) return;
 
-            if (res.data.is_complete) {
-                setIsComplete(true);
-                setFinalResult({
-                    score: res.data.overall_score,
-                    passed: res.data.passed,
-                });
-            } else {
-                // Add next question
-                setQuestionNum(res.data.question_number);
-                setChatHistory(prev => [...prev, {
-                    type: 'ai',
-                    content: res.data.next_question,
-                    category: res.data.next_category,
-                    difficulty: res.data.next_difficulty,
-                }]);
-                setQuestionData({
-                    question: res.data.next_question,
-                    category: res.data.next_category,
-                    difficulty: res.data.next_difficulty,
-                });
+            const url = URL.createObjectURL(audioBlob);
+            blobUrlRef.current = url;
 
-                // Speak the next question
-                setTimeout(() => speakText(res.data.next_question), 300);
-            }
+            const audio = new Audio(url);
+            audioRef.current = audio;
+
+            audio.onplay = () => setIsSpeaking(true);
+            audio.onended = () => {
+                if (currentId !== speakIdRef.current) return;
+                setIsSpeaking(false);
+                URL.revokeObjectURL(url);
+                blobUrlRef.current = null;
+            };
+            audio.onerror = () => {
+                if (currentId !== speakIdRef.current) return;
+                setIsSpeaking(false);
+                URL.revokeObjectURL(url);
+                blobUrlRef.current = null;
+                browserSpeak(text);
+            };
+
+            await audio.play();
         } catch (err) {
-            console.error(err);
-            setChatHistory(prev => [...prev, {
-                type: 'error',
-                content: 'Failed to submit answer. Please try again.',
-            }]);
-        } finally {
-            setSubmitting(false);
+            if (currentId !== speakIdRef.current) return;
+            console.warn('Deepgram TTS failed, using browser fallback:', err);
+            browserSpeak(text);
+        }
+    };
+
+    const browserSpeak = (text) => {
+        if (!('speechSynthesis' in window)) return;
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+        utterance.onstart = () => setIsSpeaking(true);
+        utterance.onend = () => setIsSpeaking(false);
+        utterance.onerror = () => setIsSpeaking(false);
+        window.speechSynthesis.speak(utterance);
+    };
+
+    const toggleListening = () => {
+        if (!recognitionRef.current) return;
+
+        if (isListening) {
+            recognitionRef.current.stop();
+            setIsListening(false);
+        } else {
+            stopTTS(); // Stop speaking when listening starts
+            recognitionRef.current.start();
+            setIsListening(true);
+            setAvatarEmotion('neutral');
         }
     };
 
@@ -253,35 +230,69 @@ export default function AIInterview() {
         }
     };
 
-    if (loading) return (
-        <div className="loading-overlay">
-            <div className="loading-spinner" />
-            <p>Preparing your AI interview...</p>
-        </div>
-    );
+    const handleSubmitAnswer = async () => {
+        if (!answer.trim() || submitting) return;
 
-    if (isComplete && finalResult) {
+        if (isListening) toggleListening();
+        stopTTS();
+
+        const userAnswer = answer;
+        setAnswer('');
+        setSubmitting(true);
+        setIsThinking(true); // Avatar enters thinking mode
+        setAvatarEmotion('neutral');
+
+        // Add user message
+        setChatHistory(prev => [...prev, { type: 'user', content: userAnswer }]);
+
+        try {
+            const { data: result } = await answerInterview({
+                interview_id: interviewId,
+                candidate_id: candidateRef.current.id,
+                answer: userAnswer
+            });
+
+            // Wait a bit for effect
+            setTimeout(() => {
+                setIsThinking(false);
+                setSubmitting(false);
+
+                // Show feedback
+                if (result.feedback) {
+                    setChatHistory(prev => [...prev, { type: 'feedback', content: 'Feedback', feedback: result.feedback, score: result.score }]);
+
+                    // Update Emotion based on score
+                    if (result.score >= 7) setAvatarEmotion('happy');
+                    else if (result.score <= 4) setAvatarEmotion('concerned');
+                    else setAvatarEmotion('neutral');
+                }
+
+                if (result.completed) {
+                    setTimeout(() => navigate('/candidate/portal'), 3000);
+                } else if (result.next_question) {
+                    // Next Question
+                    setTimeout(() => {
+                        setQuestionData(prev => ({ ...prev, ...result }));
+                        setQuestionNum(prev => prev + 1);
+                        setChatHistory(prev => [...prev, { type: 'ai', content: result.next_question }]);
+                        speakText(result.next_question);
+                        setAvatarEmotion('neutral');
+                    }, 2000);
+                }
+            }, 1000);
+
+        } catch (error) {
+            console.error(error);
+            setIsThinking(false);
+            setSubmitting(false);
+            alert("Failed to submit answer");
+        }
+    };
+
+    if (loading) {
         return (
-            <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <div className="card animate-scale-in" style={{ maxWidth: '500px', width: '90%', textAlign: 'center', padding: '2.5rem' }}>
-                    <div className={`score-circle ${finalResult.passed ? 'pass' : 'fail'}`} style={{ margin: '0 auto 1.5rem' }}>
-                        {finalResult.score?.toFixed(1)}
-                    </div>
-                    <h2 style={{ marginBottom: '0.5rem' }}>
-                        {finalResult.passed ? '🎉 Interview Passed!' : '😔 Interview Not Passed'}
-                    </h2>
-                    <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                        Your average score: {finalResult.score?.toFixed(1)}/10
-                    </p>
-                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-                        {finalResult.passed
-                            ? 'Excellent! You have successfully completed the entire assessment.'
-                            : 'You needed at least 1/10 to pass. Contact your admin for feedback.'}
-                    </p>
-                    <button className="btn btn-primary btn-lg" onClick={() => navigate('/candidate/portal')}>
-                        Back to Portal
-                    </button>
-                </div>
+            <div style={{ minHeight: '100vh', background: 'var(--bg-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span className="loader"></span>
             </div>
         );
     }
@@ -292,242 +303,160 @@ export default function AIInterview() {
             testType="interview"
             testId={parseInt(interviewId)}
         >
-            <div className="interview-container" style={{ paddingBottom: '140px' }}>
-                {/* Header */}
-                <div className="test-header" style={{ marginBottom: '1.5rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <Brain size={24} style={{ color: 'var(--accent-primary-light)' }} />
+            <div className="interview-split-layout">
+                {/* ── Left Panel: 3D Avatar ── */}
+                <ErrorBoundary>
+                    <Avatar3D
+                        isSpeaking={isSpeaking}
+                        isListening={isListening}
+                        isThinking={isThinking}
+                        emotion={avatarEmotion}
+                        category={questionData?.category}
+                        difficulty={questionData?.difficulty}
+                    />
+                </ErrorBoundary>
+
+                {/* ── Right Panel: Chat & Controls ── */}
+                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                    {/* Header */}
+                    <div className="card-header" style={{ marginBottom: '1rem' }}>
                         <div>
-                            <h3 style={{ fontWeight: 700, fontSize: '1rem' }}>AI Technical Interview</h3>
+                            <h3 style={{ fontWeight: 700 }}>AI Technical Interview</h3>
                             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                                 Question {questionNum} of {totalQ}
                             </p>
                         </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        {/* TTS toggle */}
-                        <button
-                            onClick={() => { setTtsEnabled(!ttsEnabled); stopTTS(); }}
-                            className="btn btn-sm btn-secondary"
-                            title={ttsEnabled ? 'Mute AI voice' : 'Unmute AI voice'}
-                            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}
-                        >
-                            {ttsEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
-                            {ttsEnabled ? 'Voice On' : 'Voice Off'}
-                        </button>
-                        <div className="progress-bar" style={{ width: '120px' }}>
-                            <div className="progress-fill" style={{ width: `${(questionNum / totalQ) * 100}%` }} />
+
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <button
+                                onClick={() => { setTtsEnabled(!ttsEnabled); stopTTS(); }}
+                                className="btn btn-sm btn-secondary"
+                                title={ttsEnabled ? 'Mute AI voice' : 'Unmute AI voice'}
+                            >
+                                {ttsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                            </button>
+                            <div className="progress-bar" style={{ width: '80px' }}>
+                                <div className="progress-fill" style={{ width: `${(questionNum / totalQ) * 100}%` }} />
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                {/* Chat */}
-                <div className="interview-chat">
-                    {chatHistory.map((msg, i) => {
-                        if (msg.type === 'ai') {
-                            return (
-                                <div key={i} className="chat-bubble ai">
-                                    <div className="label" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                        <Brain size={14} /> AI INTERVIEWER
-                                        {msg.category && <span className="badge badge-skill" style={{ fontSize: '0.65rem' }}>{msg.category}</span>}
-                                        {msg.difficulty && (
-                                            <span className={`badge ${msg.difficulty === 'easy' ? 'badge-passed' : msg.difficulty === 'hard' ? 'badge-failed' : 'badge-pending'}`}
-                                                style={{ fontSize: '0.65rem' }}>
-                                                {msg.difficulty}
+                    {/* Chat History */}
+                    <div className="chat-panel">
+                        {chatHistory.map((msg, i) => {
+                            if (msg.type === 'ai') {
+                                return (
+                                    <div key={i} className="chat-bubble ai animate-fade-in" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+                                        <div className="label" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
+                                            <Brain size={14} /> AI QUESTION
+                                            <button
+                                                onClick={() => speakText(msg.content)}
+                                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-primary-light)', padding: 0, marginLeft: 'auto' }}
+                                                title="Replay audio"
+                                            >
+                                                <Volume2 size={14} />
+                                            </button>
+                                        </div>
+                                        <p>{msg.content}</p>
+                                    </div>
+                                );
+                            }
+                            if (msg.type === 'user') {
+                                return (
+                                    <div key={i} className="chat-bubble user animate-slide-in">
+                                        <div className="label">
+                                            <MessageCircle size={14} style={{ display: 'inline', marginRight: '4px' }} />
+                                            YOUR ANSWER
+                                        </div>
+                                        <p>{msg.content}</p>
+                                    </div>
+                                );
+                            }
+                            if (msg.type === 'feedback') {
+                                return (
+                                    <div key={i} className="animate-scale-in" style={{
+                                        padding: '1rem',
+                                        background: 'var(--bg-tertiary)',
+                                        borderRadius: 'var(--radius-md)',
+                                        border: '1px solid var(--border-color)',
+                                        marginBottom: '1rem',
+                                        maxWidth: '90%',
+                                        alignSelf: 'flex-start'
+                                    }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-secondary)' }}>📊 FEEDBACK</span>
+                                            <span style={{
+                                                fontSize: '1rem', fontWeight: 800,
+                                                color: msg.score >= 7 ? 'var(--accent-success)' : msg.score >= 5 ? 'var(--accent-warning)' : 'var(--accent-danger)'
+                                            }}>
+                                                {msg.score}/10
                                             </span>
-                                        )}
-                                        {/* Replay voice button */}
-                                        <button
-                                            onClick={() => speakText(msg.content)}
-                                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-primary-light)', padding: 0 }}
-                                            title="Read question aloud"
-                                        >
-                                            <Volume2 size={14} />
-                                        </button>
-                                    </div>
-                                    <p>{msg.content}</p>
-                                </div>
-                            );
-                        }
-
-                        if (msg.type === 'user') {
-                            return (
-                                <div key={i} className="chat-bubble user">
-                                    <div className="label">
-                                        <MessageCircle size={14} style={{ display: 'inline', marginRight: '4px' }} />
-                                        YOUR ANSWER
-                                    </div>
-                                    <p>{msg.content}</p>
-                                </div>
-                            );
-                        }
-
-                        if (msg.type === 'feedback') {
-                            return (
-                                <div key={i} style={{
-                                    padding: '1rem',
-                                    background: 'var(--bg-tertiary)',
-                                    borderRadius: 'var(--radius-md)',
-                                    border: '1px solid var(--border-color)',
-                                    animation: 'fadeIn 0.3s ease',
-                                    maxWidth: '85%',
-                                }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-secondary)' }}>📊 EVALUATION</span>
-                                        <span style={{
-                                            fontSize: '1rem',
-                                            fontWeight: 800,
-                                            color: msg.score >= 7 ? 'var(--accent-success)' : msg.score >= 5 ? 'var(--accent-warning)' : 'var(--accent-danger)'
-                                        }}>
-                                            {msg.score}/10
-                                        </span>
-                                    </div>
-                                    <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{msg.feedback}</p>
-                                    {msg.strengths?.length > 0 && (
-                                        <div style={{ marginTop: '0.5rem' }}>
-                                            {msg.strengths.map((s, j) => (
-                                                <span key={j} style={{ fontSize: '0.8rem', color: 'var(--accent-success)', marginRight: '0.5rem' }}>✓ {s}</span>
-                                            ))}
                                         </div>
-                                    )}
-                                    {msg.weaknesses?.length > 0 && (
-                                        <div style={{ marginTop: '0.25rem' }}>
-                                            {msg.weaknesses.map((w, j) => (
-                                                <span key={j} style={{ fontSize: '0.8rem', color: 'var(--accent-danger)', marginRight: '0.5rem' }}>✗ {w}</span>
-                                            ))}
-                                        </div>
-                                    )}
+                                        <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{msg.feedback}</p>
+                                    </div>
+                                );
+                            }
+                            return null;
+                        })}
+
+                        {/* Typing / Thinking Indicator */}
+                        {isThinking && (
+                            <div className="chat-bubble ai animate-pulse" style={{ width: 'fit-content' }}>
+                                <div style={{ display: 'flex', gap: '0.3rem', padding: '0.2rem' }}>
+                                    <span className="typing-dot" style={{ animationDelay: '0s' }}>•</span>
+                                    <span className="typing-dot" style={{ animationDelay: '0.2s' }}>•</span>
+                                    <span className="typing-dot" style={{ animationDelay: '0.4s' }}>•</span>
                                 </div>
-                            );
-                        }
+                            </div>
+                        )}
+                        <div ref={chatEndRef} />
+                    </div>
 
-                        if (msg.type === 'error') {
-                            return (
-                                <div key={i} style={{
-                                    padding: '0.75rem',
-                                    background: 'rgba(225, 112, 85, 0.1)',
-                                    borderRadius: 'var(--radius-md)',
-                                    border: '1px solid var(--accent-danger)',
-                                    color: 'var(--accent-danger)',
-                                    fontSize: '0.9rem'
-                                }}>
-                                    {msg.content}
-                                </div>
-                            );
-                        }
-                        return null;
-                    })}
-
-                    {submitting && (
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            color: 'var(--text-muted)',
-                            fontSize: '0.85rem',
-                            padding: '0.5rem'
-                        }}>
-                            <Loader size={16} className="loading-spinner" style={{ borderWidth: '2px', animation: 'spin 0.6s linear infinite' }} />
-                            AI is evaluating your answer...
-                        </div>
-                    )}
-
-                    <div ref={chatEndRef} />
-                </div>
-
-                {/* Answer Input with Speech */}
-                {!isComplete && (
+                    {/* Input Area */}
                     <div style={{
-                        position: 'fixed',
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        padding: '1rem 2rem',
-                        background: 'var(--bg-secondary)',
+                        marginTop: 'auto',
+                        paddingTop: '1rem',
                         borderTop: '1px solid var(--border-color)',
-                        zIndex: 50,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem'
                     }}>
-                        {/* Listening indicator */}
-                        {isListening && (
-                            <div style={{
-                                textAlign: 'center',
-                                marginBottom: '0.5rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '0.5rem',
-                            }}>
-                                <span style={{
-                                    width: '10px', height: '10px',
-                                    borderRadius: '50%', background: '#ff4444',
-                                    animation: 'pulse 1s ease-in-out infinite',
-                                    display: 'inline-block',
-                                }} />
-                                <span style={{ fontSize: '0.8rem', color: '#ff4444', fontWeight: 600 }}>
-                                    Listening... Speak your answer clearly
-                                </span>
-                            </div>
-                        )}
-
-                        {/* Speaking indicator */}
-                        {isSpeaking && (
-                            <div style={{
-                                textAlign: 'center',
-                                marginBottom: '0.5rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '0.5rem',
-                            }}>
-                                <Volume2 size={14} style={{ color: 'var(--accent-primary-light)', animation: 'pulse 1s ease-in-out infinite' }} />
-                                <span style={{ fontSize: '0.8rem', color: 'var(--accent-primary-light)', fontWeight: 600 }}>
-                                    AI is speaking...
-                                </span>
-                                <button onClick={stopTTS} className="btn btn-sm" style={{ background: 'rgba(255,68,68,0.2)', color: '#ff4444', padding: '0.15rem 0.5rem', fontSize: '0.7rem' }}>
-                                    Stop
-                                </button>
-                            </div>
-                        )}
-
-                        <div className="answer-input" style={{ maxWidth: '768px', margin: '0 auto', display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-                            {/* Mic button */}
+                        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}>
+                            {/* Mic Button */}
                             {speechSupported && (
                                 <button
                                     className="btn"
                                     onClick={toggleListening}
                                     disabled={submitting}
                                     style={{
-                                        height: '60px', width: '60px', minWidth: '60px',
+                                        height: '50px', width: '50px', minWidth: '50px', padding: 0,
                                         borderRadius: '50%',
                                         background: isListening
-                                            ? 'linear-gradient(135deg, #ff4444 0%, #cc0000 100%)'
-                                            : 'linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%)',
+                                            ? 'var(--gradient-danger)'
+                                            : 'var(--gradient-primary)',
                                         color: 'white',
                                         border: 'none',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        boxShadow: isListening ? '0 0 20px rgba(255,68,68,0.4)' : '0 4px 15px rgba(0,0,0,0.2)',
-                                        transition: 'all 0.3s ease',
-                                        animation: isListening ? 'pulse 1.5s ease-in-out infinite' : 'none',
+                                        boxShadow: isListening ? '0 0 15px rgba(225, 112, 85, 0.5)' : 'none',
+                                        animation: isListening ? 'pulse 1.5s infinite' : 'none'
                                     }}
                                     title={isListening ? 'Stop listening' : 'Start speaking'}
                                 >
-                                    {isListening ? <MicOff size={22} /> : <Mic size={22} />}
+                                    {isListening ? <MicOff size={20} /> : <Mic size={20} />}
                                 </button>
                             )}
 
-                            {/* Text input */}
-                            <div style={{ flex: 1, position: 'relative' }}>
+                            {/* Text Input */}
+                            <div style={{ flex: 1 }}>
                                 <textarea
                                     className="form-textarea"
                                     style={{
-                                        minHeight: '60px', maxHeight: '120px', resize: 'none', width: '100%',
-                                        paddingRight: '1rem',
-                                        border: isListening ? '2px solid #ff4444' : undefined,
-                                        transition: 'border-color 0.3s ease',
+                                        minHeight: '50px',
+                                        height: '50px',
+                                        resize: 'none',
+                                        width: '100%',
+                                        border: isListening ? '2px solid var(--accent-danger)' : undefined
                                     }}
-                                    placeholder={isListening ? '🎤 Listening... your speech will appear here' : 'Type or click 🎤 to speak your answer...'}
+                                    placeholder={isListening ? 'Listening...' : 'Type your answer...'}
                                     value={answer}
                                     onChange={(e) => setAnswer(e.target.value)}
                                     onKeyDown={handleKeyDown}
@@ -535,23 +464,21 @@ export default function AIInterview() {
                                 />
                             </div>
 
-                            {/* Send button */}
+                            {/* Send Button */}
                             <button
                                 className="btn btn-primary"
                                 onClick={handleSubmitAnswer}
                                 disabled={!answer.trim() || submitting}
-                                style={{ height: '60px', width: '60px', minWidth: '60px' }}
+                                style={{ height: '50px', width: '50px', minWidth: '50px', padding: 0 }}
                             >
-                                {submitting ? <div className="loading-spinner" /> : <Send size={20} />}
+                                {submitting ? <Loader size={20} className="spin" /> : <Send size={20} />}
                             </button>
                         </div>
-
-                        {/* Help text */}
-                        <p style={{ textAlign: 'center', fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.4rem', maxWidth: '768px', margin: '0.4rem auto 0' }}>
-                            🎤 Click the mic to speak • ⌨️ Or type your answer • Press Enter to submit
+                        <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            {isListening ? '🔴 speaking now...' : 'Press Enter to submit'}
                         </p>
                     </div>
-                )}
+                </div>
             </div>
         </ProctoringGuard>
     );
