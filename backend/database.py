@@ -42,7 +42,7 @@ def init_db():
             answers TEXT DEFAULT '{}',
             score REAL DEFAULT 0,
             total_marks INTEGER DEFAULT 0,
-            passing_score REAL DEFAULT 10,
+            passing_score REAL DEFAULT 1,
             start_time TIMESTAMP,
             end_time TIMESTAMP,
             duration_minutes INTEGER DEFAULT 60,

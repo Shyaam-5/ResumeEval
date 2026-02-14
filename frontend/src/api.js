@@ -44,6 +44,9 @@ export const finishSQL = (candidateId) => API.post(`/student/finish-sql/${candid
 export const startInterview = (interviewId) => API.post(`/student/start-interview/${interviewId}`);
 export const answerInterview = (data) => API.post('/student/answer-interview', data);
 
+// ──── TTS API ────
+export const textToSpeech = (text) => API.post('/tts', { text }, { responseType: 'blob' });
+
 // ──── Proctoring APIs ────
 export const logProctoringEvent = (data) => API.post('/proctoring/log', data);
 export const getProctoringLogs = (candidateId) => API.get(`/proctoring/logs/${candidateId}`);

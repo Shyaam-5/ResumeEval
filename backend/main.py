@@ -1,12 +1,18 @@
 import os
 import json
 import shutil
+import httpx
 from datetime import datetime, timedelta
 from typing import Optional
+from io import BytesIO
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from database import get_db, init_db
@@ -33,6 +39,8 @@ app.add_middleware(
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
+
 # Initialize database on startup
 @app.on_event("startup")
 async def startup():
@@ -40,6 +48,9 @@ async def startup():
 
 
 # ──────────────── Pydantic Models ────────────────
+
+class TTSRequest(BaseModel):
+    text: str
 
 class LoginRequest(BaseModel):
     username: str
@@ -441,7 +452,7 @@ async def submit_mcq(data: SubmitMCQAnswer):
                 correct += 1
 
     score = (correct / total * 100) if total > 0 else 0
-    passed = score >= test["passing_score"]
+    passed = correct >= 1  # Pass if at least 1 answer is correct
     status = "passed" if passed else "failed"
 
     db.execute(
@@ -645,7 +656,7 @@ async def finish_coding_test(test_id: int):
     solved = len(submissions)
     total = len(problems)
     score = (solved / total * 100) if total > 0 else 0
-    passed = score >= 10  # Reduced pass mark for easier testing
+    passed = solved >= 1  # Pass if at least 1 problem is solved
 
     status = "passed" if passed else "failed"
     db.execute(
@@ -818,7 +829,7 @@ async def answer_interview(data: InterviewAnswer):
         # Interview complete - calculate overall score
         scores = [qa.get("score", 0) for qa in qa_list if qa.get("score") is not None]
         avg_score = sum(scores) / len(scores) if scores else 0
-        passed = avg_score >= 1  # Reduced pass mark for easier testing
+        passed = any(qa.get("score", 0) >= 5 for qa in qa_list)  # Pass if at least 1 answer is good (>=5)
 
         now = datetime.utcnow().isoformat()
         status = "passed" if passed else "failed"
@@ -957,6 +968,45 @@ async def get_proctoring_logs(candidate_id: int):
     ).fetchall()
     db.close()
     return {"logs": [dict(l) for l in logs]}
+
+
+# ──────────────── Text-to-Speech (Deepgram) ────────────────
+
+@app.post("/api/tts")
+async def text_to_speech(req: TTSRequest):
+    """Convert text to speech using Deepgram's Aura TTS API."""
+    if not DEEPGRAM_API_KEY:
+        raise HTTPException(status_code=503, detail="Deepgram API key not configured")
+
+    if not req.text or not req.text.strip():
+        raise HTTPException(status_code=400, detail="Text is required")
+
+    url = "https://api.deepgram.com/v1/speak?model=aura-asteria-en"
+    headers = {
+        "Authorization": f"Token {DEEPGRAM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {"text": req.text.strip()}
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=payload, headers=headers)
+
+            if response.status_code != 200:
+                print(f"Deepgram TTS error: {response.status_code} - {response.text}")
+                raise HTTPException(status_code=502, detail="Deepgram TTS request failed")
+
+            audio_bytes = BytesIO(response.content)
+            return StreamingResponse(
+                audio_bytes,
+                media_type="audio/mpeg",
+                headers={"Content-Disposition": "inline; filename=tts_audio.mp3"},
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Deepgram TTS request timed out")
+    except Exception as e:
+        print(f"TTS error: {e}")
+        raise HTTPException(status_code=500, detail="TTS generation failed")
 
 
 # ──────────────── Report Routes ────────────────

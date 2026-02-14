@@ -1415,3 +1415,292 @@ body {
 .font-mono {
   font-family: var(--font-mono);
 }
+
+/* ══════════════════════════════════════════════════
+   AVATAR INTERVIEWER — Split Layout & Animations
+   ══════════════════════════════════════════════════ */
+
+/* ── Split Layout ── */
+.interview-split-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 1.5rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1rem;
+  min-height: calc(100vh - 200px);
+}
+
+@media (max-width: 900px) {
+  .interview-split-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Avatar Panel ── */
+.avatar-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem 1rem 1.5rem;
+  background: var(--gradient-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  backdrop-filter: blur(16px);
+  position: sticky;
+  top: 100px;
+  height: fit-content;
+}
+
+@media (max-width: 900px) {
+  .avatar-panel {
+    position: relative;
+    top: 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 1rem;
+    gap: 0.75rem;
+  }
+}
+
+/* ── Glow Ring Wrapper ── */
+.avatar-ring-wrapper {
+  position: relative;
+  width: 180px;
+  height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.avatar-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(108, 92, 231, 0.3);
+  transition: all 0.4s ease;
+}
+
+.avatar-ring-inner {
+  inset: 6px;
+  border-color: rgba(0, 206, 201, 0.15);
+}
+
+/* Ring states */
+.avatar-ring-wrapper.avatar-speaking .avatar-ring {
+  border-color: rgba(108, 92, 231, 0.7);
+  box-shadow: 0 0 25px rgba(108, 92, 231, 0.4), 0 0 60px rgba(108, 92, 231, 0.15);
+  animation: ringPulse 1.2s ease-in-out infinite;
+}
+
+.avatar-ring-wrapper.avatar-speaking .avatar-ring-inner {
+  border-color: rgba(162, 155, 254, 0.4);
+  animation: ringPulse 1.2s ease-in-out infinite 0.2s;
+}
+
+.avatar-ring-wrapper.avatar-listening .avatar-ring {
+  border-color: rgba(0, 206, 201, 0.6);
+  box-shadow: 0 0 20px rgba(0, 206, 201, 0.3);
+  animation: ringPulse 1.8s ease-in-out infinite;
+}
+
+.avatar-ring-wrapper.avatar-thinking .avatar-ring {
+  border-color: rgba(253, 203, 110, 0.5);
+  box-shadow: 0 0 15px rgba(253, 203, 110, 0.2);
+  animation: ringRotate 3s linear infinite;
+}
+
+@keyframes ringPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.05); opacity: 0.7; }
+}
+
+@keyframes ringRotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* ── Avatar SVG ── */
+.avatar-svg {
+  width: 150px;
+  height: 150px;
+  position: relative;
+  z-index: 2;
+  filter: drop-shadow(0 4px 12px rgba(0,0,0,0.3));
+}
+
+/* Breathe / idle bob */
+.avatar-svg.avatar-idle .avatar-body {
+  animation: breathe 4s ease-in-out infinite;
+}
+
+.avatar-svg.avatar-idle .avatar-head {
+  animation: headIdle 6s ease-in-out infinite;
+}
+
+/* Speaking head slight movement */
+.avatar-svg.avatar-speaking .avatar-head {
+  animation: headSpeak 2s ease-in-out infinite;
+}
+
+/* Listening — slight nod */
+.avatar-svg.avatar-listening .avatar-head {
+  animation: headNod 2.5s ease-in-out infinite;
+}
+
+/* Thinking — head tilt */
+.avatar-svg.avatar-thinking .avatar-head {
+  animation: headThink 3s ease-in-out infinite;
+}
+
+/* ── Eye Blink ── */
+.avatar-eyes.blink ellipse {
+  ry: 1 !important;
+  transition: ry 0.1s ease;
+}
+
+.avatar-eyes.blink circle {
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+/* ── Mouth / Lip-sync ── */
+.avatar-mouth.speaking .mouth-open {
+  animation: lipSync 0.35s ease-in-out infinite;
+}
+
+.avatar-mouth.speaking .mouth-teeth {
+  animation: lipSyncTeeth 0.35s ease-in-out infinite;
+}
+
+@keyframes lipSync {
+  0%, 100% { ry: 3; }
+  30% { ry: 7; }
+  60% { ry: 4; }
+  80% { ry: 8; }
+}
+
+@keyframes lipSyncTeeth {
+  0%, 100% { ry: 1; opacity: 0.5; }
+  30% { ry: 2.5; opacity: 0.9; }
+  60% { ry: 1.5; opacity: 0.7; }
+  80% { ry: 3; opacity: 1; }
+}
+
+/* ── Body / Head Keyframes ── */
+@keyframes breathe {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(1.5px); }
+}
+
+@keyframes headIdle {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-0.5px) rotate(0.3deg); }
+  75% { transform: translateY(0.5px) rotate(-0.3deg); }
+}
+
+@keyframes headSpeak {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-0.5px) rotate(0.5deg); }
+  50% { transform: translateY(0); }
+  75% { transform: translateY(0.3px) rotate(-0.5deg); }
+}
+
+@keyframes headNod {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  30% { transform: translateY(1.5px) rotate(0deg); }
+  50% { transform: translateY(0) rotate(0deg); }
+  80% { transform: translateY(1.5px) rotate(0deg); }
+}
+
+@keyframes headThink {
+  0%, 100% { transform: rotate(0deg) translateX(0); }
+  50% { transform: rotate(3deg) translateX(2px); }
+}
+
+/* Eyebrow raise for thinking */
+.eyebrow-raised-left {
+  transform: translateY(-3px) rotate(-4deg);
+  transform-origin: center;
+}
+
+.eyebrow-raised-right {
+  transform: translateY(-2px) rotate(2deg);
+  transform-origin: center;
+}
+
+/* ── Nameplate ── */
+.avatar-nameplate {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.avatar-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.avatar-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.avatar-status-dot.speaking {
+  background: var(--accent-primary-light);
+  box-shadow: 0 0 8px rgba(108, 92, 231, 0.6);
+}
+
+.avatar-status-dot.listening {
+  background: var(--accent-secondary);
+  box-shadow: 0 0 8px rgba(0, 206, 201, 0.6);
+}
+
+.avatar-status-dot.thinking {
+  background: var(--accent-warning);
+  box-shadow: 0 0 8px rgba(253, 203, 110, 0.6);
+}
+
+/* ── Badges ── */
+.avatar-badges {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 0.5rem;
+}
+
+/* ── Status text ── */
+.avatar-status-text {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-align: center;
+  min-height: 1.2rem;
+}
+
+/* ── Chat Panel (right side) ── */
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 240px);
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.chat-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.chat-panel::-webkit-scrollbar-thumb {
+  background: var(--accent-primary-dark);
+  border-radius: 2px;
+}
